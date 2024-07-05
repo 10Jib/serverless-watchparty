@@ -1,11 +1,9 @@
 from constructs import Construct
 from aws_cdk import (
-    Duration,
     Stack,
+    aws_ec2 as ec2,
     aws_iam as iam,
-    aws_sqs as sqs,
-    aws_sns as sns,
-    aws_sns_subscriptions as subs,
+    aws_ecs as ecs
 )
 
 
@@ -14,13 +12,59 @@ class ServerlessWatchpartyStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        queue = sqs.Queue(
-            self, "ServerlessWatchpartyQueue",
-            visibility_timeout=Duration.seconds(300),
+
+        vpc = ec2.Vpc(self, "Vpc",
+            nat_gateways=0,
+            max_azs=1,
+            ip_addresses=ec2.IpAddresses.cidr("10.0.0.0/20"),
+            subnet_configuration=[{
+                'name': 'public-subnet',
+                'subnetType': ec2.SubnetType.PUBLIC,
+                'cidrMask': 24
+                }],
         )
 
-        topic = sns.Topic(
-            self, "ServerlessWatchpartyTopic"
+        # security group add ingress
+        cluster = ecs.Cluster(self, "EcsCluster",
+            vpc=vpc,
+            enable_fargate_capacity_providers=True,
+            container_insights=True,
         )
 
-        topic.add_subscription(subs.SqsSubscription(queue))
+        ecsTaskRole = iam.Role(self, 'TaskRole',
+            assumed_by=iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+            description='For minecraft server task.'
+        )
+
+        taskDefinition = ecs.FargateTaskDefinition(self, 'TaskDefinition',
+            cpu=2048,
+            memory_limit_mib=4096,
+            task_role=ecsTaskRole
+        )
+
+        watchPartyImage = ecs.ContainerImage.from_asset('./container')
+
+        # minecraftServerContainer = ecs.ContainerDefinition(self, 
+        #     'WatchPartyContainer',
+        #     task_definition=taskDefinition,
+        #     image=watchPartyImage,
+        #     # logging=ecs.LogDrivers.aws_logs(stream_prefix='minecraft'),
+        #     # environment={
+        #     #     'EULA': 'TRUE'
+        #     # },
+        #     memory_reservation_mib=4096
+        # )
+
+        taskDefinition.add_container('WatchPartyContainer', image=watchPartyImage)
+
+
+        # ecs fargate service for server
+        service = ecs.FargateService(self, "MyService",
+            cluster=cluster,
+            task_definition=taskDefinition,
+            desired_count=1,
+            # deployment_alarms=ecs.DeploymentAlarmConfig(
+            #     alarm_names=[elb_alarm.alarm_name],
+            #     behavior=ecs.AlarmBehavior.ROLLBACK_ON_ALARM
+            # )
+        )

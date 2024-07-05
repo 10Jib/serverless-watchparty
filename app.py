@@ -7,5 +7,4 @@ from serverless_watchparty.serverless_watchparty_stack import ServerlessWatchpar
 
 app = cdk.App()
 ServerlessWatchpartyStack(app, "ServerlessWatchpartyStack")
-
 app.synth()
