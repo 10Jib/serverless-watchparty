@@ -3,7 +3,8 @@ from aws_cdk import (
     Stack,
     aws_ec2 as ec2,
     aws_iam as iam,
-    aws_ecs as ecs
+    aws_ecs as ecs,
+    CfnOutput
 )
 
 
@@ -14,7 +15,7 @@ class ServerlessWatchpartyStack(Stack):
 
 
         vpc = ec2.Vpc(self, "Vpc",
-            nat_gateways=0,
+            # nat_gateways=0,
             max_azs=1,
             ip_addresses=ec2.IpAddresses.cidr("10.0.0.0/20"),
             subnet_configuration=[{
@@ -33,7 +34,7 @@ class ServerlessWatchpartyStack(Stack):
 
         ecsTaskRole = iam.Role(self, 'TaskRole',
             assumed_by=iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-            description='For minecraft server task.'
+            description='For task.'
         )
 
         taskDefinition = ecs.FargateTaskDefinition(self, 'TaskDefinition',
@@ -42,7 +43,8 @@ class ServerlessWatchpartyStack(Stack):
             task_role=ecsTaskRole
         )
 
-        watchPartyImage = ecs.ContainerImage.from_asset('./container')
+        # watchPartyImage = ecs.ContainerImage.from_asset('./container')
+        watchPartyImage = ecs.ContainerImage.from_registry('brilhartji/watchparty:latest')
 
         # minecraftServerContainer = ecs.ContainerDefinition(self, 
         #     'WatchPartyContainer',
@@ -68,3 +70,14 @@ class ServerlessWatchpartyStack(Stack):
             #     behavior=ecs.AlarmBehavior.ROLLBACK_ON_ALARM
             # )
         )
+
+        service.connections.security_groups[0].add_ingress_rule(
+            peer = ec2.Peer.ipv4(vpc.vpc_cidr_block),
+            connection = ec2.Port.tcp(3000),
+            description="Allow http inbound from VPC"
+        )
+
+        # CfnOutput(
+        #     self, "LoadBalancerDNS",
+        #     value=service.load_balancer.load_balancer_dns_name
+        # )
