@@ -15,7 +15,7 @@ class ServerlessWatchpartyStack(Stack):
 
 
         vpc = ec2.Vpc(self, "Vpc",
-            # nat_gateways=0,
+            nat_gateways=1,
             max_azs=1,
             ip_addresses=ec2.IpAddresses.cidr("10.0.0.0/20"),
             subnet_configuration=[{
@@ -23,6 +23,28 @@ class ServerlessWatchpartyStack(Stack):
                 'subnetType': ec2.SubnetType.PUBLIC,
                 'cidrMask': 24
                 }],
+        )
+
+        # vpc = ec2.Vpc.from_lookup(self, "VPC", is_default=True, region="us-east-1")
+
+        security_group = ec2.SecurityGroup(
+            self, "FargateSecurityGroup",
+            vpc=vpc,
+            description="Allow outbound access to Docker Hub, GitHub, and Alpine package manager",
+            allow_all_outbound=False  # Start with no outbound traffic
+        )
+
+        # Add outbound rules for Docker Hub, GitHub, and Alpine package manager
+        security_group.add_egress_rule(
+            peer=ec2.Peer.any_ipv4(),
+            connection=ec2.Port.tcp(80),
+            description="Allow HTTP outbound traffic"
+        )
+
+        security_group.add_egress_rule(
+            peer=ec2.Peer.any_ipv4(),
+            connection=ec2.Port.tcp(443),
+            description="Allow HTTPS outbound traffic"
         )
 
         # security group add ingress
@@ -33,7 +55,7 @@ class ServerlessWatchpartyStack(Stack):
         )
 
         ecsTaskRole = iam.Role(self, 'TaskRole',
-            assumed_by=iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+            assumed_by=iam.ServicePrincipal('ecs-tasks.amazonaws.com'),  # AmazonECSTaskExecutionRolePolicy
             description='For task.'
         )
 
@@ -65,6 +87,7 @@ class ServerlessWatchpartyStack(Stack):
             cluster=cluster,
             task_definition=taskDefinition,
             desired_count=1,
+            security_groups=[security_group],
             # deployment_alarms=ecs.DeploymentAlarmConfig(
             #     alarm_names=[elb_alarm.alarm_name],
             #     behavior=ecs.AlarmBehavior.ROLLBACK_ON_ALARM
@@ -74,7 +97,8 @@ class ServerlessWatchpartyStack(Stack):
         service.connections.security_groups[0].add_ingress_rule(
             peer = ec2.Peer.ipv4(vpc.vpc_cidr_block),
             connection = ec2.Port.tcp(3000),
-            description="Allow http inbound from VPC"
+            description="Allow http inbound from VPC",
+            # allowAllOutbound=True,
         )
 
         # CfnOutput(
