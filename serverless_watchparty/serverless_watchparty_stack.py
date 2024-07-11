@@ -5,6 +5,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_ecs as ecs,
     aws_lambda as _lambda,
+    Duration,
     CfnOutput
 )
 
@@ -167,7 +168,10 @@ class ServerlessWatchpartyStack(Stack):
                 "clusterARN": cluster.cluster_arn,
                 "taskARN": service.task_definition.task_definition_arn
             },
-            code=_lambda.Code.from_asset('lambda'))
+            code=_lambda.Code.from_asset('lambda'),
+            timeout=Duration.seconds(30)
+            
+        )
         
         fn_url = forwardFn.add_function_url(
             auth_type=_lambda.FunctionUrlAuthType.NONE

@@ -38,46 +38,63 @@ def handler(event, context):
     ecsClient = boto3.client('ecs')
     ec2Client = boto3.client('ec2')
 
-    response = ecsClient.list_tasks(
+    listTasksResponse = ecsClient.list_tasks(
         cluster=clusterARN
     )
 
+    logger.info(f"Tasks listed: {len(listTasksResponse['taskArns'])}")
+    assert len(listTasksResponse['taskArns']) == 1, "More than one task found. This should not happen."
 
-    response = ecsClient.describe_tasks(
+    describeTasksResponse = ecsClient.describe_tasks(
         cluster=clusterARN,
         tasks=[
-            response['taskArns'][0],
+            listTasksResponse['taskArns'][0],
         ]
     )
+    logger.info(f"Tasks described: {len(describeTasksResponse['tasks'])}")
 
     # if containers are active, describe them and get their status.
-    if len(response['tasks']) == 0:
+    if len(describeTasksResponse['tasks']) == 0:
+        logger.error("More than one task found. This should not happen.")
         return {'body': 'No tasks instances found.'}  # should also start task
     
-    if len(response['tasks'][0]) > 1:
+    if len(describeTasksResponse['tasks']) > 1:
         logger.error("More than one task found. This should not happen.")
+        logger.info(describeTasksResponse['tasks'][0]['containers'][0]['lastStatus'])
+        attachments = describeTasksResponse['tasks'][0]['attachments'][0]['details']
+        logger.info([d['value'] for d in attachments if d['name'] == 'networkInterfaceId'][0])
+        return(json.dumps(describeTasksResponse))
 
     # response = ecsClient.describe_container_instances(
     #     cluster=clusterARN,
     #     containerInstances=response['containerInstanceArns'],
     # )
     # print(response[0]['status'])
-    logger.info(response['tasks'][0]['containers'][0]['lastStatus'])
+    logger.info(describeTasksResponse['tasks'][0]['containers'][0]['lastStatus'])
 
 
 
 
     # Describe the tasks to find associated ENIs
-    attachments = response['tasks'][0]['attachments'][0]['details']
+    attachments = describeTasksResponse['tasks'][0]['attachments'][0]['details']
     eni_id = [d['value'] for d in attachments if d['name'] == 'networkInterfaceId'][0]
 
     # Describe the ENI to get the public IP
     eni_response = ec2Client.describe_network_interfaces(NetworkInterfaceIds=[eni_id])
     public_ip = eni_response['NetworkInterfaces'][0]['Association']['PublicIp']
 
-    print("Public IP:", public_ip)
+    logger.info(f"Public IP: {str(public_ip)}")
 
 
+    return ({
+        "statusCode": 302,
+        "headers": {
+            "Location": public_ip + ":3000"
+        },
+        "body": json.dumps({
+            "message": "Redirecting to ECS container"
+        })
+    })
 
     return {
         'statusCode': 200,
