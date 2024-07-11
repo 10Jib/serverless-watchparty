@@ -4,6 +4,7 @@ from aws_cdk import (
     aws_ec2 as ec2,
     aws_iam as iam,
     aws_ecs as ecs,
+    aws_lambda as _lambda,
     CfnOutput
 )
 
@@ -59,6 +60,8 @@ class ServerlessWatchpartyStack(Stack):
             description="Allow inbound traffic"
         )
 
+        
+
         # security group add ingress
         cluster = ecs.Cluster(self, "EcsCluster",
             vpc=vpc,
@@ -78,7 +81,8 @@ class ServerlessWatchpartyStack(Stack):
         )
 
         # watchPartyImage = ecs.ContainerImage.from_asset('./container')
-        watchPartyImage = ecs.ContainerImage.from_registry('brilhartji/watchparty:latest'
+        watchPartyImage = ecs.ContainerImage.from_registry('brilhartji/watchparty:latest',
+                                                           
         )
 
 
@@ -104,14 +108,19 @@ class ServerlessWatchpartyStack(Stack):
             protocol=ecs.Protocol.TCP
         )
 
-        taskDefinition.add_container('WatchPartyContainer', image=watchPartyImage, port_mappings=[webport_mapping, adminport_mapping])
+        taskDefinition.add_container('WatchPartyContainer',
+            image=watchPartyImage,
+            port_mappings=[webport_mapping, adminport_mapping],
+            logging=ecs.LogDrivers.aws_logs(stream_prefix='watchparty'),
+        )
+
 
 
         # ecs fargate service for server
         service = ecs.FargateService(self, "MyService",
             cluster=cluster,
             task_definition=taskDefinition,
-            desired_count=0,
+            desired_count=1,
             assign_public_ip=True,
             security_groups=[security_group],
             # usespot=True,
@@ -131,3 +140,41 @@ class ServerlessWatchpartyStack(Stack):
         #     self, "LoadBalancerDNS",
         #     value=service.load_balancer.load_balancer_dns_name
         # )
+
+
+        lambdaTaskRole = iam.Role(self, 'FnRole',
+            assumed_by=iam.ServicePrincipal('lambda.amazonaws.com'),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name('service-role/AWSLambdaBasicExecutionRole'),
+                iam.ManagedPolicy.from_aws_managed_policy_name('service-role/AWSLambdaVPCAccessExecutionRole'),
+            ],
+            description='For controller function.'
+        )
+
+        lambdaTaskRole.add_to_policy(iam.PolicyStatement(
+            actions=["ecs:ListContainerInstances", "ecs:DescribeContainerInstances", "ecs:DescribeTasks", "ecs:ListTasks", "ec2:DescribeNetworkInterfaces"],
+            resources=["*"]
+        ))
+
+
+        forwardFn = _lambda.Function(self, 'controllerFN',
+            handler='lambda-handler.handler',
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            role=lambdaTaskRole,
+            vpc=vpc,
+            security_groups=[security_group],
+            environment = {
+                "clusterARN": cluster.cluster_arn,
+                "taskARN": service.task_definition.task_definition_arn
+            },
+            code=_lambda.Code.from_asset('lambda'))
+        
+        fn_url = forwardFn.add_function_url(
+            auth_type=_lambda.FunctionUrlAuthType.NONE
+        )
+
+        CfnOutput(self, "TheUrl",
+            value=fn_url.url
+        )
+
+        # add code to change dns record to the fn url

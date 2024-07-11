@@ -31,24 +31,59 @@ def handler(event, context):
     :return: The result of the action.
     """
     clusterARN = os.getenv('clusterARN')
-    containerID = os.getenv('containerID')
+    taskARN = os.getenv('taskARN')
 
-    logger.log(logging.INFO, f"Function started with clusterARN: {clusterARN} and containerID: {containerID}")
+    logger.log(logging.INFO, f"Function started with clusterARN: {clusterARN} and containerID: {taskARN}")
 
-    client = boto3.client('ecs')
+    ecsClient = boto3.client('ecs')
+    ec2Client = boto3.client('ec2')
 
-    response = client.list_container_instances(
+    response = ecsClient.list_tasks(
+        cluster=clusterARN
+    )
+
+
+    response = ecsClient.describe_tasks(
         cluster=clusterARN,
+        tasks=[
+            response['taskArns'][0],
+        ]
     )
 
     # if containers are active, describe them and get their status.
+    if len(response['tasks']) == 0:
+        return {'body': 'No tasks instances found.'}  # should also start task
+    
+    if len(response['tasks'][0]) > 1:
+        logger.error("More than one task found. This should not happen.")
 
-    # response = client.describe_container_instances(
+    # response = ecsClient.describe_container_instances(
     #     cluster=clusterARN,
-    #     containerInstances=[
-    #         containerID,
-    #     ],
+    #     containerInstances=response['containerInstanceArns'],
     # )
+    # print(response[0]['status'])
+    logger.info(response['tasks'][0]['containers'][0]['lastStatus'])
+
+
+
+
+    # Describe the tasks to find associated ENIs
+    attachments = response['tasks'][0]['attachments'][0]['details']
+    eni_id = [d['value'] for d in attachments if d['name'] == 'networkInterfaceId'][0]
+
+    # Describe the ENI to get the public IP
+    eni_response = ec2Client.describe_network_interfaces(NetworkInterfaceIds=[eni_id])
+    public_ip = eni_response['NetworkInterfaces'][0]['Association']['PublicIp']
+
+    print("Public IP:", public_ip)
+
+
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps(public_ip)
+    }
+    # return response['tasks'][0]['containers'][0]['networkInterfaces'][0]
 
     # check to see if this is a base get or xhtml request
     # check to see if service is up, and what ip is
