@@ -1,12 +1,16 @@
 from constructs import Construct
 from aws_cdk import (
     Stack,
+    aws_logs as logs,
+    aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cloudwatch_actions,
     aws_ec2 as ec2,
     aws_iam as iam,
     aws_ecs as ecs,
     aws_lambda as _lambda,
+    RemovalPolicy,
     Duration,
-    CfnOutput
+    CfnOutput,
 )
 
 open_port = 3000
@@ -109,10 +113,16 @@ class ServerlessWatchpartyStack(Stack):
             protocol=ecs.Protocol.TCP
         )
 
+        log_group = logs.LogGroup(
+            self, 'MyLogGroup',
+            log_group_name='WatchTaskOutput',
+            removal_policy=RemovalPolicy.DESTROY
+        )
+
         taskDefinition.add_container('WatchPartyContainer',
             image=watchPartyImage,
             port_mappings=[webport_mapping, adminport_mapping],
-            logging=ecs.LogDrivers.aws_logs(stream_prefix='watchparty'),
+            logging=ecs.LogDrivers.aws_logs(stream_prefix='watchparty', log_group=log_group),
         )
 
 
@@ -153,7 +163,7 @@ class ServerlessWatchpartyStack(Stack):
         )
 
         lambdaTaskRole.add_to_policy(iam.PolicyStatement(
-            actions=["ecs:ListContainerInstances", "ecs:DescribeContainerInstances", "ecs:DescribeTasks", "ecs:ListTasks", "ec2:DescribeNetworkInterfaces"],
+            actions=["ecs:ListContainerInstances", "ecs:DescribeContainerInstances", "ecs:DescribeTasks", "ecs:ListTasks", "ec2:DescribeNetworkInterfaces", "ecs:StopTask", "ecs:StartTask"],
             resources=["*"]
         ))
 
@@ -168,7 +178,7 @@ class ServerlessWatchpartyStack(Stack):
                 "clusterARN": cluster.cluster_arn,
                 "taskARN": service.task_definition.task_definition_arn
             },
-            code=_lambda.Code.from_asset('lambda'),
+            code=_lambda.Code.from_asset('lambda/controllerFN'),
             timeout=Duration.seconds(30)
             
         )
@@ -180,5 +190,43 @@ class ServerlessWatchpartyStack(Stack):
         CfnOutput(self, "TheUrl",
             value=fn_url.url
         )
+
+        stopFn = _lambda.Function(self, 'stopFn',
+            handler='lambda-handler.handler',
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            role=lambdaTaskRole,
+            vpc=vpc,
+            security_groups=[security_group],
+            environment = {
+                "clusterARN": cluster.cluster_arn,
+                "taskARN": service.task_definition.task_definition_arn
+            },
+            code=_lambda.Code.from_asset('lambda/stopFN'),
+            timeout=Duration.seconds(5)
+            
+        )
+
+
+        metric_filter = logs.MetricFilter(
+            self, 'Room Count',
+            log_group=log_group,
+            filter_pattern=logs.FilterPattern.literal("%\d+ rooms in batch$%"),  # probably only works for one digit room usage
+            #filter_pattern=logs.FilterPattern.literal("[RELEASE\]\[.\] \d+? rooms in batch"), 
+            metric_namespace='ECS',
+            metric_name='ActiveRoomCount',
+            metric_value='$.2',
+        )
+
+        alarm = cloudwatch.Alarm(
+            self, 'ShutdownAlarm',
+            metric=metric_filter.metric(),
+            threshold=0,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=cloudwatch.ComparisonOperator.LESS_THAN_OR_EQUAL_TO_THRESHOLD,
+            alarm_description='Alarm when user pool size is 0 for 15 minutes',
+        )
+
+        alarm.add_alarm_action(cloudwatch_actions.LambdaAction(stopFn))
 
         # add code to change dns record to the fn url
